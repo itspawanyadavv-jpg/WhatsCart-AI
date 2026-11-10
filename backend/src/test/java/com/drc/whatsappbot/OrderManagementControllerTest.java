@@ -90,6 +90,9 @@ class OrderManagementControllerTest {
         mockMvc.perform(get("/api/health"))
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("\"allowSimulatePay\":false")));
+
+        mockMvc.perform(post("/api/payments/checkout/confirm").param("orderCode", orderCode))
+                .andExpect(status().isForbidden());
     }
 }
 

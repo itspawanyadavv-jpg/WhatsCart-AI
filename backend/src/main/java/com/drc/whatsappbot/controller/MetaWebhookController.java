@@ -3,6 +3,7 @@ package com.drc.whatsappbot.controller;
 import com.drc.whatsappbot.config.BotProperties;
 import com.drc.whatsappbot.enums.MessageChannel;
 import com.drc.whatsappbot.service.ConversationEngineService;
+import com.drc.whatsappbot.service.LlmHinglishParserService;
 import com.drc.whatsappbot.service.WhatsAppGatewayService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -24,15 +25,18 @@ public class MetaWebhookController {
     private final BotProperties props;
     private final WhatsAppGatewayService gatewayService;
     private final ConversationEngineService engine;
+    private final LlmHinglishParserService parserService;
     private final ObjectMapper mapper;
 
     public MetaWebhookController(BotProperties props,
                                  WhatsAppGatewayService gatewayService,
                                  ConversationEngineService engine,
+                                 LlmHinglishParserService parserService,
                                  ObjectMapper mapper) {
         this.props = props;
         this.gatewayService = gatewayService;
         this.engine = engine;
+        this.parserService = parserService;
         this.mapper = mapper;
     }
 
@@ -75,11 +79,16 @@ public class MetaWebhookController {
                         String name = contactNames.getOrDefault(from, "WhatsApp User");
                         String type = msg.path("type").asText("");
                         if ("image".equals(type) || "audio".equals(type) || "voice".equals(type) || "document".equals(type)) {
-                            String caption = msg.path(type).path("caption").asText("");
-                            String mimeType = msg.path(type).path("mime_type").asText(
+                            JsonNode mediaNode = msg.path(type);
+                            String caption = mediaNode.path("caption").asText("");
+                            String mimeType = mediaNode.path("mime_type").asText(
                                     ("audio".equals(type) || "voice".equals(type)) ? "audio/ogg" : "image/jpeg");
+                            String mediaId = mediaNode.path("id").asText("");
+                            byte[] mediaBytes = (!mediaId.isBlank() && parserService.isGeminiMultimodalReady())
+                                    ? gatewayService.downloadMetaMedia(mediaId)
+                                    : null;
                             if (!from.isBlank()) {
-                                engine.handleInboundMedia(from, name, null, mimeType, caption, MessageChannel.META_WHATSAPP);
+                                engine.handleInboundMedia(from, name, mediaBytes, mimeType, caption, MessageChannel.META_WHATSAPP);
                                 processed++;
                             }
                             continue;

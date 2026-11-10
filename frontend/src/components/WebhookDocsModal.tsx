@@ -4,15 +4,17 @@ import { getStoredAdminKey, setStoredAdminKey } from '../api';
 
 interface Props {
   onClose: () => void;
+  onAdminKeyChange?: () => void;
 }
 
-export const WebhookDocsModal: React.FC<Props> = ({ onClose }) => {
+export const WebhookDocsModal: React.FC<Props> = ({ onClose, onAdminKeyChange }) => {
   const [adminKey, setAdminKey] = useState(getStoredAdminKey);
   const [savedNotice, setSavedNotice] = useState(false);
 
   const handleSaveKey = (e: React.FormEvent) => {
     e.preventDefault();
     setStoredAdminKey(adminKey);
+    onAdminKeyChange?.();
     setSavedNotice(true);
     setTimeout(() => setSavedNotice(false), 2000);
   };

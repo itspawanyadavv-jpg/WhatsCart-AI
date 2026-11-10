@@ -1,13 +1,17 @@
 package com.drc.whatsappbot.controller;
 
+import com.drc.whatsappbot.config.AdminAuthGuard;
 import com.drc.whatsappbot.config.BotProperties;
+import com.drc.whatsappbot.enums.BotOrderStatus;
 import com.drc.whatsappbot.enums.BotPaymentStatus;
 import com.drc.whatsappbot.model.BotOrder;
+import com.drc.whatsappbot.model.BotOrderItem;
 import com.drc.whatsappbot.repository.BotOrderRepository;
 import com.drc.whatsappbot.service.ConversationEngineService;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -23,13 +27,102 @@ public class PaymentCallbackController {
     private final BotOrderRepository orderRepo;
     private final ConversationEngineService engine;
     private final BotProperties props;
+    private final AdminAuthGuard adminAuthGuard;
 
     public PaymentCallbackController(BotOrderRepository orderRepo,
                                      ConversationEngineService engine,
-                                     BotProperties props) {
+                                     BotProperties props,
+                                     AdminAuthGuard adminAuthGuard) {
         this.orderRepo = orderRepo;
         this.engine = engine;
         this.props = props;
+        this.adminAuthGuard = adminAuthGuard;
+    }
+
+    @GetMapping(value = "/checkout", produces = MediaType.TEXT_HTML_VALUE)
+    public ResponseEntity<String> renderCheckoutPage(@RequestParam(name = "orderCode", required = false) String orderCode) {
+        if (orderCode == null || orderCode.isBlank()) {
+            return ResponseEntity.badRequest().body(renderPage("Invalid Checkout Link",
+                    "Missing order reference. Please return to WhatsApp and check your order status.", false));
+        }
+        Optional<BotOrder> maybeOrder = orderRepo.findByOrderCode(orderCode);
+        if (maybeOrder.isEmpty()) {
+            return ResponseEntity.status(404).body(renderPage("Order Not Found",
+                    "Could not find order " + HtmlUtils.htmlEscape(orderCode) + ".", false));
+        }
+
+        BotOrder order = maybeOrder.get();
+        if (order.getStatus() == BotOrderStatus.CANCELLED) {
+            return ResponseEntity.ok(renderPage("Order Cancelled",
+                    "Order <code>" + HtmlUtils.htmlEscape(order.getOrderCode()) + "</code> was cancelled.", false));
+        }
+        if (order.getPaymentStatus() == BotPaymentStatus.PAID) {
+            return handleRazorpayCallback(order.getOrderCode(), order.getRazorpayPaymentId(), "paid");
+        }
+
+        String amount = order.getTotal().setScale(2, RoundingMode.HALF_UP).toPlainString();
+        StringBuilder itemsHtml = new StringBuilder("<ul style=\"padding-left:18px;margin:8px 0;color:#cbd5e1;font-size:14px;\">");
+        for (BotOrderItem item : order.getItems()) {
+            itemsHtml.append("<li>")
+                    .append(item.getQuantity()).append("x ")
+                    .append(HtmlUtils.htmlEscape(item.getProductName()))
+                    .append(" — ₹").append(HtmlUtils.htmlEscape(item.getLineTotal().setScale(2, RoundingMode.HALF_UP).toPlainString()))
+                    .append("</li>");
+        }
+        itemsHtml.append("</ul>");
+
+        boolean showDemoButton = props.getSecurity().isAllowSimulatePay()
+                && (props.getSecurity().getAdminApiKey() == null || props.getSecurity().getAdminApiKey().isBlank());
+        String upiLink = order.getUpiDeepLink() != null ? order.getUpiDeepLink() : "";
+
+        String body = """
+                <p><strong>Store:</strong> %s</p>
+                <p><strong>Order ID:</strong> <code>%s</code></p>
+                <p><strong>Payable Amount:</strong> ₹%s</p>
+                <p><strong>Deliver to:</strong> %s</p>
+                %s
+                <div style="display:flex;flex-direction:column;gap:10px;margin-top:16px;">
+                  %s
+                  %s
+                </div>
+                <p style="margin-top:14px;color:#94a3b8;font-size:13px;">
+                  UPI ID: <code>%s</code>
+                </p>
+                """.formatted(
+                HtmlUtils.htmlEscape(props.getStoreName()),
+                HtmlUtils.htmlEscape(order.getOrderCode()),
+                HtmlUtils.htmlEscape(amount),
+                HtmlUtils.htmlEscape(order.getDeliveryAddress()),
+                itemsHtml.toString(),
+                upiLink.isBlank() ? "" : "<a href=\"" + HtmlUtils.htmlEscape(upiLink)
+                        + "\" style=\"display:block;text-align:center;background:#0284c7;color:#fff;padding:11px 14px;border-radius:10px;font-weight:700;text-decoration:none;\">Pay ₹"
+                        + HtmlUtils.htmlEscape(amount) + " in UPI App</a>",
+                showDemoButton ? """
+                        <form method="post" action="/api/payments/checkout/confirm" style="margin:0;">
+                          <input type="hidden" name="orderCode" value="%s" />
+                          <button type="submit" style="width:100%%;background:#059669;color:#fff;border:none;padding:11px 14px;border-radius:10px;font-weight:700;font-size:14px;cursor:pointer;">
+                            Simulate UPI Paid (Demo Mode)
+                          </button>
+                        </form>
+                        """.formatted(HtmlUtils.htmlEscape(order.getOrderCode())) : "",
+                HtmlUtils.htmlEscape(props.getMerchantUpiId())
+        );
+
+        return ResponseEntity.ok(renderPage("UPI Checkout", body, false));
+    }
+
+    @PostMapping(value = "/checkout/confirm", produces = MediaType.TEXT_HTML_VALUE)
+    public ResponseEntity<String> confirmDemoCheckout(@RequestParam(name = "orderCode") String orderCode) {
+        adminAuthGuard.requireSimulatePayAllowed();
+        adminAuthGuard.requireAdminIfConfigured(null);
+
+        try {
+            BotOrder paid = engine.markPaymentSucceeded(orderCode, "pay_checkout_demo_" + System.currentTimeMillis());
+            return handleRazorpayCallback(paid.getOrderCode(), paid.getRazorpayPaymentId(), "paid");
+        } catch (IllegalStateException ex) {
+            return ResponseEntity.ok(renderPage("Order Cannot Be Paid",
+                    HtmlUtils.htmlEscape(ex.getMessage()), false));
+        }
     }
 
     @GetMapping(value = "/callback", produces = MediaType.TEXT_HTML_VALUE)

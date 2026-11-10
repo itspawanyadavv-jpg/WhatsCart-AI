@@ -5,9 +5,11 @@ import com.drc.whatsappbot.enums.MessageChannel;
 import com.drc.whatsappbot.enums.MessageDirection;
 import com.drc.whatsappbot.model.ChatMessage;
 import com.drc.whatsappbot.repository.ChatMessageRepository;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.util.LinkedMultiValueMap;
@@ -30,15 +32,26 @@ public class WhatsAppGatewayService {
     private final SseEventBusService sseBus;
     private final BotProperties props;
     private final ObjectMapper mapper;
+    private final RestClient restClient;
 
+    @Autowired
     public WhatsAppGatewayService(ChatMessageRepository messageRepo,
                                   SseEventBusService sseBus,
                                   BotProperties props,
                                   ObjectMapper mapper) {
+        this(messageRepo, sseBus, props, mapper, RestClient.builder().build());
+    }
+
+    public WhatsAppGatewayService(ChatMessageRepository messageRepo,
+                                  SseEventBusService sseBus,
+                                  BotProperties props,
+                                  ObjectMapper mapper,
+                                  RestClient restClient) {
         this.messageRepo = messageRepo;
         this.sseBus = sseBus;
         this.props = props;
         this.mapper = mapper;
+        this.restClient = restClient;
     }
 
     public ChatMessage recordInbound(String phone, MessageChannel channel, String body, Map<String, Object> metadata) {
@@ -146,21 +159,42 @@ public class WhatsAppGatewayService {
         }
     }
 
+    public byte[] downloadMetaMedia(String mediaId) {
+        if (!isMetaConfigured() || mediaId == null || mediaId.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode mediaInfo = restClient.get()
+                    .uri("https://graph.facebook.com/v21.0/" + mediaId.trim())
+                    .header("Authorization", "Bearer " + props.getWhatsapp().getAccessToken())
+                    .retrieve()
+                    .body(JsonNode.class);
+            String downloadUrl = mediaInfo == null ? "" : mediaInfo.path("url").asText("");
+            if (downloadUrl.isBlank()) {
+                return null;
+            }
+            return restClient.get()
+                    .uri(downloadUrl)
+                    .header("Authorization", "Bearer " + props.getWhatsapp().getAccessToken())
+                    .retrieve()
+                    .body(byte[].class);
+        } catch (Exception ex) {
+            log.warn("Failed to download Meta WhatsApp media {}: {}", mediaId, ex.getMessage());
+            return null;
+        }
+    }
+
     private void sendViaMetaCloudApi(String toPhone, String text, Map<String, Object> metadata) {
         if (!isMetaConfigured()) {
             return;
         }
         try {
             String cleanPhone = toPhone.replaceAll("[^0-9]", "");
-            RestClient client = RestClient.builder()
-                    .baseUrl("https://graph.facebook.com/v21.0/" + props.getWhatsapp().getPhoneNumberId())
-                    .defaultHeader("Authorization", "Bearer " + props.getWhatsapp().getAccessToken())
-                    .build();
-
             Map<String, Object> payload = buildMetaPayload(cleanPhone, text, metadata);
 
-            client.post()
-                    .uri("/messages")
+            restClient.post()
+                    .uri("https://graph.facebook.com/v21.0/" + props.getWhatsapp().getPhoneNumberId() + "/messages")
+                    .header("Authorization", "Bearer " + props.getWhatsapp().getAccessToken())
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(payload)
                     .retrieve()
@@ -170,7 +204,7 @@ public class WhatsAppGatewayService {
         }
     }
 
-    private Map<String, Object> buildMetaPayload(String cleanPhone, String text, Map<String, Object> metadata) {
+    public Map<String, Object> buildMetaPayload(String cleanPhone, String text, Map<String, Object> metadata) {
         if (metadata != null && metadata.get("quickReplies") instanceof List<?> rawReplies) {
             List<String> buttonTitles = rawReplies.stream()
                     .filter(String.class::isInstance)
@@ -180,7 +214,7 @@ public class WhatsAppGatewayService {
                     .limit(3)
                     .toList();
 
-            if (!buttonTitles.isEmpty() && buttonTitles.size() == rawReplies.size() && text.length() <= 1024) {
+            if (!buttonTitles.isEmpty() && text.length() <= 1024) {
                 List<Map<String, Object>> buttons = new ArrayList<>();
                 for (int i = 0; i < buttonTitles.size(); i++) {
                     String title = buttonTitles.get(i);
@@ -220,20 +254,16 @@ public class WhatsAppGatewayService {
                     ? props.getWhatsapp().getTwilioFromNumber()
                     : "whatsapp:" + props.getWhatsapp().getTwilioFromNumber();
 
-            RestClient client = RestClient.builder()
-                    .baseUrl("https://api.twilio.com/2010-04-01/Accounts/" + props.getWhatsapp().getTwilioAccountSid())
-                    .defaultHeaders(h -> h.setBasicAuth(
-                            props.getWhatsapp().getTwilioAccountSid(),
-                            props.getWhatsapp().getTwilioAuthToken()))
-                    .build();
-
             MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
             form.put("To", List.of(formattedTo));
             form.put("From", List.of(formattedFrom));
             form.put("Body", List.of(text));
 
-            client.post()
-                    .uri("/Messages.json")
+            restClient.post()
+                    .uri("https://api.twilio.com/2010-04-01/Accounts/" + props.getWhatsapp().getTwilioAccountSid() + "/Messages.json")
+                    .headers(h -> h.setBasicAuth(
+                            props.getWhatsapp().getTwilioAccountSid(),
+                            props.getWhatsapp().getTwilioAuthToken()))
                     .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                     .body(form)
                     .retrieve()

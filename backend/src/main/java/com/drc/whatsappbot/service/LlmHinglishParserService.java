@@ -402,7 +402,7 @@ public class LlmHinglishParserService {
         if (addrMatcher.find()) {
             inlineAddress = addrMatcher.group(1).trim();
             itemText = normalized.substring(0, addrMatcher.start()).trim();
-        } else if (currentState == ConversationState.AWAITING_ADDRESS && !looksLikeGroceryOrder(lower)) {
+        } else if (currentState == ConversationState.AWAITING_ADDRESS && !looksLikeGroceryOrderInAddressPrompt(lower)) {
             return new LlmParseResult(IntentType.SET_ADDRESS, List.of(), normalized, "HINGLISH_NLP_FALLBACK", elapsed(start), "Delivery address captured");
         } else if (looksLikePureAddress(lower)) {
             return new LlmParseResult(IntentType.SET_ADDRESS, List.of(), normalized, "HINGLISH_NLP_FALLBACK", elapsed(start), "Delivery address captured");
@@ -543,19 +543,24 @@ public class LlmHinglishParserService {
         return sb.toString();
     }
 
-    private boolean looksLikeGroceryOrder(String lower) {
-        return lower.matches(".*\\b(\\d+|ek|do|teen|char|paanch|kg|packet|milk|doodh|bread|atta|dal|rice|oil|salt|butter|chai|tea|soap|surf|maggi|bhujia|chips|biscuit|sugar|cheeni)\\b.*")
-                && !looksLikePureAddress(lower);
+    private boolean looksLikeGroceryOrderInAddressPrompt(String lower) {
+        if (looksLikePureAddress(lower)) {
+            return false;
+        }
+        boolean hasExplicitOrderVerb = lower.matches("^\\s*(add|order|bhejo|send|deliver)\\b.*");
+        boolean hasAttachedWeightUnit = lower.matches(".*\\b\\d+(?:\\.\\d+)?(?:kg|kgs|g|gm|gms|grams|l|ltr|litre|litres|ml)\\b.*");
+        boolean hasSpacedWeightOrPackUnit = lower.matches(".*\\b\\d+(?:\\.\\d+)?\\s+(?:kg|kgs|gm|gms|grams|ltr|litre|litres|ml|packet|packets|pkt|pkts|pack|packs|bottle|bottles)\\b.*");
+        return containsGroceryKeywords(lower) || hasAttachedWeightUnit || hasSpacedWeightOrPackUnit || hasExplicitOrderVerb;
     }
 
     private boolean looksLikePureAddress(String lower) {
-        boolean hasAddressKeyword = lower.matches(".*\\b(flat|house|h\\.no|sector|block|gali|lane|road|nagar|colony|apartment|apts|floor|heights|enclave|vihar|pin|pincode)\\b.*");
+        boolean hasAddressKeyword = lower.matches(".*\\b(flat|house|h\\.?no|sector|sec|block|gali|lane|road|rd|marg|street|st|avenue|ave|nagar|colony|apartment|apts|floor|heights|enclave|vihar|chowk|society|tower|residency|puram|bagh|phase|plot|pin|pincode|\\d{6})\\b.*");
         boolean hasGroceryWord = containsGroceryKeywords(lower);
         return hasAddressKeyword && !hasGroceryWord;
     }
 
     private boolean containsGroceryKeywords(String lower) {
-        return lower.matches(".*\\b(milk|doodh|dudh|bread|atta|aata|dal|daal|rice|chawal|oil|tel|salt|namak|butter|makkhan|chai|tea|soap|sabun|surf|maggi|bhujia|chips|biscuit|parle|sugar|cheeni|curd|dahi|colgate|closeup|masala)\\b.*");
+        return lower.matches(".*\\b(milk|doodh|dudh|taaza|bread|pav|atta|aata|gehun|aashirvaad|aashirvad|ashirwad|dal|daal|toor|arhar|moong|rice|chawal|basmati|oil|tel|fortune|sunflower|salt|namak|butter|makkhan|maska|chai|tea|patti|soap|sabun|dettol|surf|detergent|maggi|maggie|noodles|bhujia|bhujiya|haldiram|chips|lays|biscuit|biscuits|parle|parleg|sugar|cheeni|chini|curd|dahi|colgate|closeup|toothpaste|masala|everest|cornflakes|corn|kellogg)\\b.*");
     }
 
     private String cleanProductQuery(String raw) {

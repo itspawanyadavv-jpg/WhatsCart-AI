@@ -18,7 +18,7 @@ A standalone **Hinglish AI WhatsApp Grocery Ordering Bot** built for **DRC Krish
 
 3. **Razorpay UPI Payment Links & Checkout (`RazorpayPaymentLinkService`, `PaymentCallbackController`)**
    - Computes itemized bills with live delivery fee & free-delivery threshold nudges.
-   - Generates live **Razorpay Payment Links** (`POST /api/payment_links`) when API keys are set, or interactive UPI deep links (`upi://pay?...`) + instant demo checkout in local mode.
+   - Generates live **Razorpay Payment Links** (`POST /api/payment_links`) when API keys are set, or a built-in UPI checkout page (`GET /api/payments/checkout?orderCode=...`) + `upi://pay?...` deep links in local/demo mode.
    - Serves a confirmation landing page at `GET /api/payments/callback?orderCode=...`.
    - Verifies signed webhooks (`POST /api/webhooks/razorpay` via `X-Razorpay-Signature` HMAC-SHA256) for `payment_link.paid`, `payment_link.expired`, `payment_link.cancelled`, and `payment.failed`.
 
@@ -38,6 +38,7 @@ A standalone **Hinglish AI WhatsApp Grocery Ordering Bot** built for **DRC Krish
 cd backend
 mvn spring-boot:run
 ```
+*(Spring Boot automatically imports root `.env` when running locally; OS/Docker env vars override `.env`.)*
 
 ### 2. Run Frontend (Port 5175)
 ```powershell
@@ -52,6 +53,17 @@ Or run both in one command on Windows:
 ```
 
 Open **http://localhost:5175** in your browser.
+
+---
+
+## Production Deployment (Docker)
+
+```bash
+cp .env.example .env
+# Set PUBLIC_BASE_URL, CORS_ALLOWED_ORIGINS, LLM/WhatsApp/Razorpay keys,
+# STRICT_WEBHOOK_VERIFICATION=true, ALLOW_SIMULATE_PAY=false, ADMIN_API_KEY
+docker compose up -d --build
+```
 
 ---
 

@@ -57,8 +57,16 @@ public class TwilioWebhookController {
                 ? publicBase.replaceAll("/+$", "") + request.getRequestURI() + querySuffix
                 : null;
 
+        String hostHeader = request.getHeader("Host");
+        String httpsHostUrl = (hostHeader != null && !hostHeader.isBlank()
+                && !hostHeader.startsWith("localhost") && !hostHeader.startsWith("127.0.0.1")
+                && fullUrl.startsWith("http://"))
+                ? "https://" + hostHeader.trim() + request.getRequestURI() + querySuffix
+                : null;
+
         boolean sigValid = gatewayService.verifyTwilioSignature(fullUrl, paramCopy, signature)
-                || (publicUrl != null && gatewayService.verifyTwilioSignature(publicUrl, paramCopy, signature));
+                || (publicUrl != null && gatewayService.verifyTwilioSignature(publicUrl, paramCopy, signature))
+                || (httpsHostUrl != null && gatewayService.verifyTwilioSignature(httpsHostUrl, paramCopy, signature));
         if (!sigValid) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body("<?xml version=\"1.0\" encoding=\"UTF-8\"?><Response></Response>");
@@ -75,7 +83,7 @@ public class TwilioWebhookController {
         }
 
         ChatTurnResponse turn;
-        if (numMedia > 0 && body.isBlank()) {
+        if (numMedia > 0) {
             String mediaUrl = allParams.get("MediaUrl0");
             String mediaType = allParams.get("MediaContentType0");
             byte[] mediaBytes = downloadTwilioMediaIfMultimodalReady(mediaUrl);

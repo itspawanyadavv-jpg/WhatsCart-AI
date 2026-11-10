@@ -1,4 +1,6 @@
 spring:
+  config:
+    import: optional:classpath:/
   datasource:
     generate-unique-name: true
     driver-class-name: org.h2.Driver

@@ -13,7 +13,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.web.client.RestClient;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
@@ -23,6 +25,9 @@ import javax.crypto.spec.SecretKeySpec;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -186,6 +191,53 @@ class WebhookControllerTest {
                         .param("Body", ""))
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("Voice note received")));
+    }
+
+    @Test
+    void handlesTwilioCaptionedMediaByParsingCaptionItems() throws Exception {
+        mockMvc.perform(post("/api/webhooks/twilio")
+                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                        .param("From", "whatsapp:+919811117777")
+                        .param("ProfileName", "Meera")
+                        .param("NumMedia", "1")
+                        .param("MediaContentType0", "image/jpeg")
+                        .param("MediaUrl0", "https://api.twilio.com/media/456")
+                        .param("Body", "2 Tata salt aur 1 Parle-G bhejo"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("Tata Salt")))
+                .andExpect(content().string(containsString("Parle-G")));
+    }
+
+    @Test
+    void downloadsMetaMediaAndBuildsInteractiveButtonPayloads() {
+        BotProperties props = new BotProperties();
+        props.getWhatsapp().setAccessToken("meta_token_123");
+        props.getWhatsapp().setPhoneNumberId("987654321");
+
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        server.expect(requestTo("https://graph.facebook.com/v21.0/media_abc"))
+                .andExpect(header("Authorization", "Bearer meta_token_123"))
+                .andRespond(withSuccess("{\"url\":\"https://lookaside.fbsbx.com/media/abc\"}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo("https://lookaside.fbsbx.com/media/abc"))
+                .andExpect(header("Authorization", "Bearer meta_token_123"))
+                .andRespond(withSuccess("fake-image-bytes".getBytes(StandardCharsets.UTF_8), MediaType.IMAGE_JPEG));
+
+        WhatsAppGatewayService gw = new WhatsAppGatewayService(messageRepo, sseBus, props, mapper, builder.build());
+        byte[] bytes = gw.downloadMetaMedia("media_abc");
+        server.verify();
+        assertThat(new String(bytes, StandardCharsets.UTF_8)).isEqualTo("fake-image-bytes");
+
+        Map<String, Object> interactive = gw.buildMetaPayload("919876543210", "Choose payment:",
+                Map.of("quickReplies", java.util.List.of("Pay via UPI", "Cash on Delivery")));
+        assertThat(interactive.get("type")).isEqualTo("interactive");
+
+        Map<String, Object> filteredInteractive = gw.buildMetaPayload("919876543210", "Welcome!",
+                Map.of("quickReplies", java.util.List.of(
+                        "2 packet Amul milk, 1 brown bread, aur 5kg Aashirvaad atta",
+                        "Catalog dikhao",
+                        "Order status")));
+        assertThat(filteredInteractive.get("type")).isEqualTo("interactive");
     }
 }
 

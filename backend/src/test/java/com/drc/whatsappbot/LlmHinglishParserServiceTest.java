@@ -65,6 +65,17 @@ class LlmHinglishParserServiceTest {
         LlmParseResult res = parser.parse("House 18, Block B, Green Park", ConversationState.AWAITING_ADDRESS);
         assertThat(res.intent()).isEqualTo(IntentType.SET_ADDRESS);
         assertThat(res.deliveryAddress()).isEqualTo("House 18, Block B, Green Park");
+
+        LlmParseResult numericAddr = parser.parse("123 MG Marg, Connaught Place, New Delhi 110001", ConversationState.AWAITING_ADDRESS);
+        assertThat(numericAddr.intent()).isEqualTo(IntentType.SET_ADDRESS);
+        assertThat(numericAddr.deliveryAddress()).isEqualTo("123 MG Marg, Connaught Place, New Delhi 110001");
+
+        LlmParseResult laneAddr = parser.parse("24/B Indiranagar, Near Metro", ConversationState.AWAITING_ADDRESS);
+        assertThat(laneAddr.intent()).isEqualTo(IntentType.SET_ADDRESS);
+
+        LlmParseResult groceryDuringAddr = parser.parse("add 2 Amul milk", ConversationState.AWAITING_ADDRESS);
+        assertThat(groceryDuringAddr.intent()).isEqualTo(IntentType.ADD_ITEMS);
+        assertThat(groceryDuringAddr.items()).hasSize(1);
     }
 
     @Test

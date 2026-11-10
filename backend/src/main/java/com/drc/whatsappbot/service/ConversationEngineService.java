@@ -208,7 +208,7 @@ public class ConversationEngineService {
                 ));
             }
             case REMOVE_ITEMS -> {
-                replyText = handleRemoveItems(parseResult, cart, session, rules);
+                replyText = handleRemoveItems(parseResult, cart, session, rules, catalog);
                 replyMeta.put("quickReplies", buildCartQuickReplies(session));
             }
             case UPDATE_QUANTITY -> {
@@ -260,7 +260,7 @@ public class ConversationEngineService {
                             + "How would you like to pay?\n"
                             + "• Reply *UPI* for instant Razorpay UPI payment link\n"
                             + "• Reply *COD* for Cash on Delivery";
-                    replyMeta.put("quickReplies", List.of("Pay via UPI", "Cash on Delivery (COD)"));
+                    replyMeta.put("quickReplies", List.of("Pay via UPI", "Cash on Delivery"));
                 }
             }
             case CONFIRM_ORDER -> {
@@ -284,7 +284,7 @@ public class ConversationEngineService {
                                 + "Choose payment mode:\n"
                                 + "• Reply *UPI* to get your Razorpay UPI link\n"
                                 + "• Reply *COD* for Cash on Delivery";
-                        replyMeta.put("quickReplies", List.of("Pay via UPI", "Cash on Delivery (COD)"));
+                        replyMeta.put("quickReplies", List.of("Pay via UPI", "Cash on Delivery"));
                     }
                 }
             }
@@ -296,8 +296,15 @@ public class ConversationEngineService {
                     BillTotals totals = computeTotals(cart, rules);
                     BotOrder order = placeOrder(session, cart, totals, "UPI_LINK", channel);
                     RazorpayPaymentLinkService.PaymentLinkOutcome link = paymentLinkService.createPaymentLink(order);
+                    String base = props.getRazorpay().getCallbackBaseUrl() == null
+                            ? "http://localhost:8090"
+                            : props.getRazorpay().getCallbackBaseUrl().replaceAll("/+$", "");
+                    String payableUrl = link.liveRazorpay()
+                            ? link.shortUrl()
+                            : base + "/api/payments/checkout?orderCode=" + order.getOrderCode();
+
                     order.setRazorpayPaymentLinkId(link.linkId());
-                    order.setRazorpayPaymentLinkUrl(link.shortUrl());
+                    order.setRazorpayPaymentLinkUrl(payableUrl);
                     order.setUpiDeepLink(link.upiDeepLink());
                     orderRepo.save(order);
 
@@ -311,13 +318,14 @@ public class ConversationEngineService {
                             + "Order ID: *" + order.getOrderCode() + "*\n"
                             + "Amount: *₹" + formatMoney(order.getTotal()) + "*\n"
                             + "Deliver to: " + order.getDeliveryAddress() + "\n\n"
-                            + "🔗 Pay securely via Razorpay UPI:\n" + link.shortUrl() + "\n\n"
+                            + (link.liveRazorpay() ? "🔗 Pay securely via Razorpay UPI:\n" : "🔗 Open UPI Checkout:\n")
+                            + payableUrl + "\n\n"
                             + "_As soon as your payment succeeds, you'll receive an instant confirmation & delivery OTP here._";
 
                     replyMeta.put("paymentCard", Map.of(
                             "orderCode", order.getOrderCode(),
                             "amount", order.getTotal(),
-                            "shortUrl", link.shortUrl(),
+                            "shortUrl", payableUrl,
                             "upiDeepLink", link.upiDeepLink(),
                             "liveRazorpay", link.liveRazorpay()
                     ));
@@ -518,8 +526,20 @@ public class ConversationEngineService {
     public ChatTurnResponse resetSession(String rawPhone, String customerName) {
         String phone = normalizePhone(rawPhone);
         messageRepo.deleteByPhone(phone);
-        sessionRepo.findByPhone(phone).ifPresent(sessionRepo::delete);
-        ChatSession fresh = createSession(phone, customerName);
+        ChatSession session = sessionRepo.findByPhone(phone).orElseGet(() -> {
+            ChatSession s = new ChatSession();
+            s.setPhone(phone);
+            return s;
+        });
+        session.setCustomerName(customerName != null && !customerName.isBlank()
+                ? customerName.trim()
+                : "WhatsApp Customer");
+        session.setState(ConversationState.IDLE);
+        session.setCartJson("[]");
+        session.setDeliveryAddress(null);
+        session.setActiveOrderCode(null);
+        session.setUpdatedAt(LocalDateTime.now());
+        ChatSession fresh = sessionRepo.save(session);
         gatewayService.sendReply(phone, MessageChannel.SIMULATOR, buildGreetingReply(fresh), Map.of(
                 "quickReplies", List.of(
                         "Bhaiya 2 packet Amul milk, 1 brown bread, aur 5kg Aashirvaad atta deliver kar do",
@@ -669,7 +689,11 @@ public class ConversationEngineService {
         return "📭 You don't have an active order to cancel right now.";
     }
 
-    private String handleRemoveItems(LlmParseResult parseResult, List<CartItemEntry> cart, ChatSession session, StoreRulesDto rules) {
+    private String handleRemoveItems(LlmParseResult parseResult,
+                                     List<CartItemEntry> cart,
+                                     ChatSession session,
+                                     StoreRulesDto rules,
+                                     List<CatalogProduct> catalog) {
         if (cart.isEmpty()) {
             return "🛒 Your cart is already empty.";
         }
@@ -678,29 +702,27 @@ public class ConversationEngineService {
         }
         int modifiedCount = 0;
         for (ParsedItem target : parseResult.items()) {
-            String q = target.productQuery().toLowerCase(Locale.ROOT);
-            boolean explicitQty = target.rawText() != null && target.rawText().trim().matches("^(?:\\d+\\b.*|.*\\b\\d+)$");
-            for (int i = 0; i < cart.size(); i++) {
-                CartItemEntry entry = cart.get(i);
-                if (entry.productName().toLowerCase(Locale.ROOT).contains(q)
-                        || (entry.rawQuery() != null && entry.rawQuery().toLowerCase(Locale.ROOT).contains(q))) {
-                    if (explicitQty && entry.quantity() > target.quantity()) {
-                        cart.set(i, new CartItemEntry(
-                                entry.productId(),
-                                entry.productName(),
-                                entry.unit(),
-                                entry.unitPrice(),
-                                entry.quantity() - target.quantity(),
-                                entry.rawQuery(),
-                                entry.confidence()
-                        ));
-                    } else {
-                        cart.remove(i);
-                    }
-                    modifiedCount++;
-                    break;
-                }
+            int matchedIndex = findCartIndexForRemoval(target, cart, catalog);
+            if (matchedIndex < 0) {
+                continue;
             }
+            CartItemEntry entry = cart.get(matchedIndex);
+            boolean explicitQty = hasExplicitQuantity(target);
+            int removeQty = Math.max(1, target.quantity());
+            if (explicitQty && entry.quantity() > removeQty) {
+                cart.set(matchedIndex, new CartItemEntry(
+                        entry.productId(),
+                        entry.productName(),
+                        entry.unit(),
+                        entry.unitPrice(),
+                        entry.quantity() - removeQty,
+                        entry.rawQuery(),
+                        entry.confidence()
+                ));
+            } else {
+                cart.remove(matchedIndex);
+            }
+            modifiedCount++;
         }
         saveCart(session, cart);
         if (modifiedCount == 0) {
@@ -711,6 +733,50 @@ public class ConversationEngineService {
             return "🗑️ Removed! Your cart is now empty.";
         }
         return "✂️ Cart updated! Updated bill:\n\n" + buildBillSummaryReply(cart, session, rules, List.of());
+    }
+
+    private int findCartIndexForRemoval(ParsedItem target, List<CartItemEntry> cart, List<CatalogProduct> catalog) {
+        String q = target.productQuery().toLowerCase(Locale.ROOT);
+        for (int i = 0; i < cart.size(); i++) {
+            CartItemEntry entry = cart.get(i);
+            if (entry.productName().toLowerCase(Locale.ROOT).contains(q)
+                    || (entry.rawQuery() != null && entry.rawQuery().toLowerCase(Locale.ROOT).contains(q))) {
+                return i;
+            }
+        }
+        if (catalog != null && !catalog.isEmpty()) {
+            Set<Long> cartProductIds = new HashSet<>();
+            for (CartItemEntry entry : cart) {
+                if (entry.productId() != null) {
+                    cartProductIds.add(entry.productId());
+                }
+            }
+            List<CatalogProduct> cartProducts = catalog.stream()
+                    .filter(p -> p.getId() != null && cartProductIds.contains(p.getId()))
+                    .toList();
+            if (!cartProducts.isEmpty()) {
+                FuzzyCatalogMatcherService.ResolvedMatch resolved = matcherService.match(target, cartProducts);
+                if (resolved.result().matched() && resolved.result().productId() != null) {
+                    for (int i = 0; i < cart.size(); i++) {
+                        if (Objects.equals(cart.get(i).productId(), resolved.result().productId())) {
+                            return i;
+                        }
+                    }
+                }
+            }
+        }
+        return -1;
+    }
+
+    private boolean hasExplicitQuantity(ParsedItem target) {
+        if (target.quantity() > 1) {
+            return true;
+        }
+        if (target.rawText() == null) {
+            return false;
+        }
+        return target.rawText().trim().matches(
+                "(?i)^(?:\\d+|ek|one|do|two|teen|three|char|chaar|four|paanch|panch|five)\\b.*|.*\\b\\d+$");
     }
 
     private void mergeIntoCart(List<CartItemEntry> cart, CatalogMatchResult matched, int qtyToAdd) {
@@ -962,7 +1028,7 @@ public class ConversationEngineService {
 
     private List<String> buildCartQuickReplies(ChatSession session) {
         if (session.getDeliveryAddress() != null && !session.getDeliveryAddress().isBlank()) {
-            return List.of("Pay via UPI", "Cash on Delivery (COD)", "Clear cart");
+            return List.of("Pay via UPI", "Cash on Delivery", "Clear cart");
         }
         return List.of("Confirm Order", "Flat 402, Krishna Heights, Sector 12", "Clear cart");
     }

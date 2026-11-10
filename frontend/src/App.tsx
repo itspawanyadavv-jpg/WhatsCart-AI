@@ -43,6 +43,8 @@ export default function App() {
   const [sending, setSending] = useState(false);
   const [showWebhookDocs, setShowWebhookDocs] = useState(false);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
+  const [adminAuthRequired, setAdminAuthRequired] = useState(false);
+  const [adminKeyVersion, setAdminKeyVersion] = useState(0);
 
   const loadSessionFor = useCallback(async (targetPhone: string, targetName: string) => {
     const sess = await api.getSession(targetPhone);
@@ -54,25 +56,40 @@ export default function App() {
     }
   }, []);
 
+  const loadOrdersSafe = useCallback(async () => {
+    try {
+      const ordList = await api.getOrders();
+      setOrders(ordList);
+      setAdminAuthRequired(false);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg.toLowerCase().includes('admin-key')) {
+        setOrders([]);
+        setAdminAuthRequired(true);
+      } else {
+        throw err;
+      }
+    }
+  }, []);
+
   const loadAll = useCallback(async () => {
     try {
-      const [h, ordList, catData] = await Promise.all([
+      const [h, catData] = await Promise.all([
         api.getHealth(),
-        api.getOrders(),
         api.getCatalog(),
       ]);
       setHealth(h);
-      setOrders(ordList);
       setCatalog(catData.products);
       setStoreRules(catData.storeRules);
       setDrcApiBaseUrl(catData.drcApiBaseUrl);
       setLastLiveSyncOk(catData.lastLiveSyncOk);
       await loadSessionFor(DEFAULT_PHONE, DEFAULT_CUSTOMER);
+      await loadOrdersSafe();
       setErrorBanner(null);
     } catch (err) {
       setErrorBanner(err instanceof Error ? err.message : 'Backend connection error');
     }
-  }, [loadSessionFor]);
+  }, [loadOrdersSafe, loadSessionFor]);
 
   useEffect(() => {
     void loadAll();
@@ -133,14 +150,14 @@ export default function App() {
     return () => {
       merchantSource.close();
     };
-  }, []);
+  }, [adminKeyVersion]);
 
   const refreshCatalogAndOrders = async () => {
-    const [ordList, catData, h] = await Promise.all([api.getOrders(), api.getCatalog(), api.getHealth()]);
-    setOrders(ordList);
+    const [catData, h] = await Promise.all([api.getCatalog(), api.getHealth()]);
     setCatalog(catData.products);
     setStoreRules(catData.storeRules);
     setHealth(h);
+    await loadOrdersSafe();
   };
 
   const handleSend = async (text: string) => {
@@ -342,12 +359,35 @@ export default function App() {
           <div className="console-body">
             {activeTab === 'inspector' && <AiPipelineInspector session={session} />}
             {activeTab === 'merchant' && (
-              <MerchantOrderConsole
-                orders={orders}
-                allowSimulatePay={health?.allowSimulatePay ?? true}
-                onSimulatePay={handleSimulatePay}
-                onUpdateStatus={handleUpdateOrderStatus}
-              />
+              <>
+                {adminAuthRequired && (
+                  <div
+                    className="card"
+                    style={{
+                      marginBottom: 14,
+                      borderColor: 'rgba(245, 158, 11, 0.45)',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: 10,
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <span style={{ fontSize: 12.5, color: '#fcd34d' }}>
+                      🔒 Admin API key required to view and manage merchant dispatch orders.
+                    </span>
+                    <button type="button" className="btn btn-primary" onClick={() => setShowWebhookDocs(true)}>
+                      Enter Admin Key
+                    </button>
+                  </div>
+                )}
+                <MerchantOrderConsole
+                  orders={orders}
+                  allowSimulatePay={health?.allowSimulatePay ?? true}
+                  onSimulatePay={handleSimulatePay}
+                  onUpdateStatus={handleUpdateOrderStatus}
+                />
+              </>
             )}
             {activeTab === 'catalog' && (
               <CatalogAndSyncPanel
@@ -364,7 +404,17 @@ export default function App() {
         </section>
       </main>
 
-      {showWebhookDocs && <WebhookDocsModal onClose={() => setShowWebhookDocs(false)} />}
+      {showWebhookDocs && (
+        <WebhookDocsModal
+          onClose={() => setShowWebhookDocs(false)}
+          onAdminKeyChange={() => {
+            setAdminKeyVersion((v) => v + 1);
+            void loadOrdersSafe().catch((err) => {
+              setErrorBanner(err instanceof Error ? err.message : 'Failed to load orders');
+            });
+          }}
+        />
+      )}
     </div>
   );
 }

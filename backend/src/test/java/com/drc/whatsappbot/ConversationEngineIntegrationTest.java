@@ -65,12 +65,14 @@ class ConversationEngineIntegrationTest {
         assertThat(turn3.state()).isEqualTo(ConversationState.AWAITING_PAYMENT);
         assertThat(turn3.deliveryAddress()).isEqualTo("Flat 402, Krishna Heights, Sector 12");
 
-        // 4. Choose UPI -> creates order + Razorpay/UPI link
+        // 4. Choose UPI -> creates order + local checkout URL + UPI intent URI
         ChatTurnResponse turn4 = engine.handleInboundMessage(phone, "Aman", "UPI", MessageChannel.SIMULATOR);
         assertThat(turn4.state()).isEqualTo(ConversationState.IDLE);
         assertThat(turn4.activeOrder()).isNotNull();
         assertThat(turn4.activeOrder().getPaymentStatus()).isEqualTo(BotPaymentStatus.PENDING);
         assertThat(turn4.activeOrder().getUpiDeepLink()).contains("upi://pay");
+        assertThat(turn4.activeOrder().getRazorpayPaymentLinkUrl())
+                .contains("/api/payments/checkout?orderCode=" + turn4.activeOrder().getOrderCode());
 
         // 5. Complete UPI payment -> order confirmed + WhatsApp notification pushed
         String orderCode = turn4.activeOrder().getOrderCode();
@@ -158,6 +160,30 @@ class ConversationEngineIntegrationTest {
         ChatTurnResponse reordered = engine.handleInboundMessage(phone, "Vikram", "repeat last order", MessageChannel.SIMULATOR);
         assertThat(reordered.state()).isEqualTo(ConversationState.REVIEWING_CART);
         assertThat(reordered.cart()).hasSize(2);
+    }
+
+    @Test
+    void removesCartItemsUsingHinglishSynonyms() {
+        String phone = "+919900445566";
+        engine.resetSession(phone, "Sonia");
+
+        engine.handleInboundMessage(phone, "Sonia", "2 Amul milk aur 2 Tata salt", MessageChannel.SIMULATOR);
+        ChatTurnResponse partial = engine.handleInboundMessage(phone, "Sonia", "remove 1 namak", MessageChannel.SIMULATOR);
+        assertThat(partial.cart()).hasSize(2);
+        assertThat(partial.cart())
+                .anySatisfy(item -> {
+                    assertThat(item.productName()).contains("Tata Salt");
+                    assertThat(item.quantity()).isEqualTo(1);
+                });
+
+        ChatTurnResponse removedMilk = engine.handleInboundMessage(phone, "Sonia", "remove doodh", MessageChannel.SIMULATOR);
+        assertThat(removedMilk.cart()).hasSize(1);
+        assertThat(removedMilk.cart().get(0).productName()).contains("Tata Salt");
+
+        ChatTurnResponse afterReset = engine.resetSession(phone, "Sonia");
+        assertThat(afterReset.state()).isEqualTo(ConversationState.IDLE);
+        assertThat(afterReset.cart()).isEmpty();
+        assertThat(afterReset.messages()).hasSize(1);
     }
 }
 
