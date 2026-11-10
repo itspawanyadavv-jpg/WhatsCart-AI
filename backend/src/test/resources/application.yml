@@ -1,0 +1,17 @@
+spring:
+  datasource:
+    generate-unique-name: true
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+
+bot:
+  drc:
+    sync-on-startup: false
+    include-local-staples: true
+  llm:
+    provider: FALLBACK
+  whatsapp:
+    verify-token: test-verify-token
+

@@ -1,0 +1,52 @@
+server:
+  port: ${PORT:8090}
+  forward-headers-strategy: framework
+
+spring:
+  application:
+    name: drc-whatsapp-bot
+  datasource:
+    url: ${DB_URL:jdbc:h2:file:./data/whatsappbot;MODE=MySQL;DB_CLOSE_DELAY=-1;AUTO_SERVER=TRUE}
+    username: ${DB_USER:sa}
+    password: ${DB_PASSWORD:}
+    driver-class-name: ${DB_DRIVER:org.h2.Driver}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+
+bot:
+  store-name: ${STORE_NAME:DRC Krishna Gen Store}
+  merchant-upi-id: ${MERCHANT_UPI_ID:drcgenstore@okicici}
+  cors-allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5175,http://localhost:5173,http://localhost:3000}
+  drc:
+    api-base-url: ${DRC_API_BASE_URL:https://13-206-156-137.sslip.io}
+    sync-on-startup: ${DRC_SYNC_ON_STARTUP:true}
+    include-local-staples: ${DRC_INCLUDE_LOCAL_STAPLES:true}
+    timeout-ms: ${DRC_API_TIMEOUT_MS:3500}
+  llm:
+    provider: ${LLM_PROVIDER:AUTO}
+    gemini-api-key: ${GEMINI_API_KEY:}
+    gemini-model: ${GEMINI_MODEL:gemini-2.5-flash}
+    openai-api-key: ${OPENAI_API_KEY:}
+    openai-model: ${OPENAI_MODEL:gpt-4o-mini}
+    timeout-ms: ${LLM_TIMEOUT_MS:12000}
+  whatsapp:
+    provider: ${WHATSAPP_PROVIDER:SIMULATOR}
+    verify-token: ${WHATSAPP_VERIFY_TOKEN:drc-whatsapp-verify-token}
+    app-secret: ${WHATSAPP_APP_SECRET:}
+    access-token: ${WHATSAPP_ACCESS_TOKEN:}
+    phone-number-id: ${WHATSAPP_PHONE_NUMBER_ID:}
+    twilio-account-sid: ${TWILIO_ACCOUNT_SID:}
+    twilio-auth-token: ${TWILIO_AUTH_TOKEN:}
+    twilio-from-number: ${TWILIO_FROM_NUMBER:}
+  razorpay:
+    key-id: ${RAZORPAY_KEY_ID:}
+    key-secret: ${RAZORPAY_KEY_SECRET:}
+    webhook-secret: ${RAZORPAY_WEBHOOK_SECRET:}
+    callback-base-url: ${PUBLIC_BASE_URL:http://localhost:8090}
+  security:
+    strict-webhook-verification: ${STRICT_WEBHOOK_VERIFICATION:false}
+    allow-simulate-pay: ${ALLOW_SIMULATE_PAY:true}
+    admin-api-key: ${ADMIN_API_KEY:}
+
