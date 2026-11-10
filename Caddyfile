@@ -1,0 +1,6 @@
+{$BOT_DOMAIN:localhost} {
+    encode gzip
+    reverse_proxy frontend:80 {
+        flush_interval -1
+    }
+}

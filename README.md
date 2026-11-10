@@ -56,13 +56,20 @@ Open **http://localhost:5175** in your browser.
 
 ---
 
-## Production Deployment (Docker)
+## Production Deployment (Docker & AWS EC2)
 
 ```bash
 cp .env.example .env
 # Set PUBLIC_BASE_URL, CORS_ALLOWED_ORIGINS, LLM/WhatsApp/Razorpay keys,
 # STRICT_WEBHOOK_VERIFICATION=true, ALLOW_SIMULATE_PAY=false, ADMIN_API_KEY
 docker compose up -d --build
+```
+
+For automated AWS EC2 provisioning with Caddy HTTPS (`https://<ec2-ip>.sslip.io`):
+```powershell
+.\provision-aws-ec2.ps1
+# Then copy .env & run on the EC2 host:
+# sudo ./deploy-aws-ec2.sh
 ```
 
 ---
